@@ -1,0 +1,190 @@
+diff --git a/Makefile b/Makefile
+index d313f2f..4a09ae3 100644
+--- a/Makefile
++++ b/Makefile
+@@ -28,6 +28,7 @@ OBJS = \
+ 	vectors.o\
+ 	vm.o\
+ 
++
+ # Cross-compiling (e.g., on Mac OS X)
+ # TOOLPREFIX = i386-jos-elf
+ 
+@@ -182,7 +183,7 @@ UPROGS=\
+ 	_wc\
+ 	_zombie\
+ 	_open_files\
+-	_lsof
++	_lsof\
+ 
+ fs.img: mkfs README $(UPROGS)
+ 	./mkfs fs.img README $(UPROGS)
+@@ -251,7 +252,7 @@ qemu-nox-gdb: fs.img xv6.img .gdbinit
+ 
+ EXTRA=\
+ 	mkfs.c ulib.c user.h cat.c echo.c forktest.c grep.c kill.c\
+-	ln.c ls.c mkdir.c rm.c stressfs.c usertests.c wc.c zombie.c\
++	ln.c ls.c mkdir.c rm.c stressfs.c usertests.c wc.c lsof.c  zombie.c\
+ 	printf.c umalloc.c\
+ 	README dot-bochsrc *.pl toc.* runoff runoff1 runoff.list\
+ 	.gdbinit.tmpl gdbutil\
+diff --git a/defs.h b/defs.h
+index 82fb982..dfd97f7 100644
+--- a/defs.h
++++ b/defs.h
+@@ -120,7 +120,7 @@ void            userinit(void);
+ int             wait(void);
+ void            wakeup(void*);
+ void            yield(void);
+-
++int		lsof(void);
+ // swtch.S
+ void            swtch(struct context**, struct context*);
+ 
+diff --git a/lsof.c b/lsof.c
+index 007a487..3e41d51 100644
+--- a/lsof.c
++++ b/lsof.c
+@@ -1,11 +1,7 @@
+-/* this is a place holder.
+- * replace with your own code
+- */
+-
+ #include "types.h"
+ #include "user.h"
+ 
+ int main(){
+-    printf(1,"hello from lsof\n");
++    lsof();
+     exit();
+ }
+\ No newline at end of file
+diff --git a/proc.c b/proc.c
+index 806b1b1..a6e4f92 100644
+--- a/proc.c
++++ b/proc.c
+@@ -6,6 +6,9 @@
+ #include "x86.h"
+ #include "proc.h"
+ #include "spinlock.h"
++#include "fs.h"
++#include "sleeplock.h"
++#include "file.h"
+ 
+ struct {
+   struct spinlock lock;
+@@ -532,3 +535,46 @@ procdump(void)
+     cprintf("\n");
+   }
+ }
++
++int
++lsof()
++{
++	struct proc *p;
++	struct file *f;
++	int fd;
++	char *wr;
++
++	sti();
++	acquire(&ptable.lock);
++	cprintf("PID \t fd \t type \t read/write \t \n");
++	for (p=ptable.proc; p<&ptable.proc[NPROC]; p++)
++	{
++		for (fd=0; fd<NOFILE; fd++)
++		{
++			f = p->ofile[fd];
++
++			if (f->type && f != FD_NONE)
++			{
++				if(f->readable && f->writable) {wr ="RW";}
++				else if(f->readable && !(f->writable)) {wr ="R";}
++				else {wr ="W";}  
++					
++				if(f->type == FD_INODE)
++				{
++					cprintf("%d \t %d \t regular \t %s \t \n",p->pid, fd, wr);
++				}
++				else if(f->type == FD_PIPE)
++				{
++					cprintf("%d \t %d \t pipe \t %s \t \n",p->pid, fd, wr);
++				}
++			}
++				
++		}
++	}	
++
++	release(&ptable.lock);
++	return 22;
++}
++
++
++
+diff --git a/syscall.c b/syscall.c
+index d2218c3..a385ff6 100644
+--- a/syscall.c
++++ b/syscall.c
+@@ -104,6 +104,8 @@ extern int sys_wait(void);
+ extern int sys_write(void);
+ extern int sys_uptime(void);
+ extern int sys_halt(void);
++extern int sys_lsof(void);
++
+ static int (*syscalls[])(void) = {
+ [SYS_fork]    sys_fork,
+ [SYS_exit]    sys_exit,
+@@ -126,7 +128,8 @@ static int (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
+-[SYS_halt]    sys_halt
++[SYS_halt]    sys_halt,
++[SYS_lsof]    sys_lsof,
+ };
+ 
+ void
+diff --git a/syscall.h b/syscall.h
+index 1dd7b9b..b0b2679 100644
+--- a/syscall.h
++++ b/syscall.h
+@@ -20,4 +20,5 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_lsof   22
+ #define SYS_halt   50
+diff --git a/sysproc.c b/sysproc.c
+index 4fc95e9..7b97140 100644
+--- a/sysproc.c
++++ b/sysproc.c
+@@ -97,4 +97,8 @@ sys_halt(void)
+   return 0;
+ }
+ 
+-
++int
++sys_lsof(void)
++{
++	return lsof();
++}
+diff --git a/user.h b/user.h
+index 14f64db..5be544f 100644
+--- a/user.h
++++ b/user.h
+@@ -24,6 +24,7 @@ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
+ int halt(void);
++int lsof(void);
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/usys.S b/usys.S
+index 0d4eaed..2674c0a 100644
+--- a/usys.S
++++ b/usys.S
+@@ -30,3 +30,4 @@ SYSCALL(sbrk)
+ SYSCALL(sleep)
+ SYSCALL(uptime)
+ SYSCALL(halt)
++SYSCALL(lsof)
